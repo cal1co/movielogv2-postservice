@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	likeHandler "github.com/cal1co/movielogv2-postservice/redis"
 	"github.com/gin-gonic/gin"
 	"github.com/gocql/gocql"
 )
@@ -71,7 +73,10 @@ func main() {
 	})
 
 	r.POST("/posts/:id/like", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		post_id := c.Param("id")
+		likeHandler.Like(ctx, post_id)
 
 		var reqUser ReqUser
 		if err := c.BindJSON(&reqUser); err != nil {
