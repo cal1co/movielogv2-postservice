@@ -43,6 +43,7 @@ func GetPostLikes(postID string, redisClient *redis.Client, ctx context.Context,
 		if err != nil {
 			fmt.Println(err)
 		}
+		redisClient.Expire(ctx, likeCountKey, time.Hour).Result()
 		return likeCount
 	}
 
@@ -58,16 +59,13 @@ func Like(postID string, redisClient *redis.Client, ctx context.Context, c *gin.
 	if err != nil {
 		ThrowLikeError(c, err)
 	}
-	fmt.Println(likeCountKey, likeCount)
 	if comment {
-		fmt.Println("UPDATING RANKING")
 		UpdateRanking(redisClient, ctx, likeCountKey, likeCount, postID, parentID)
 	}
 	return likeCount
 }
 
 func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey string, count int, commentID string, postID string) {
-	// need to get postid
 	parentPostId := fmt.Sprintf("post:%s:comments", postID)
 	exists, err := redisClient.ZScore(ctx, parentPostId, commentID).Result()
 	if exists == 0 {
@@ -84,7 +82,6 @@ func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey 
 		}
 	}
 	comments, err := redisClient.ZRevRangeWithScores(ctx, parentPostId, 0, -1).Result()
-	fmt.Println("COMMENTS:", comments)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -93,13 +90,12 @@ func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey 
 	}
 }
 
-// func LikePost(ctx context.Context, redisClient *redis.Client, postID string, c *gin.Context) {
-// 	likeCountKey := fmt.Sprintf("post:%s:likes", postID)
-// 	Like(likeCountKey, redisClient, ctx, c)
-// }
+func GetRankingByLikes(redisClient *redis.Client, ctx context.Context, page int) {
 
-// func LikeComment(ctx context.Context, redisClient *redis.Client, commentID string, c *gin.Context, postID string) {
-// 	likeCountKey := fmt.Sprintf("comment:%s:likes", commentID)
-// 	count := Like(likeCountKey, redisClient, ctx, c)
-// 	UpdateRanking(redisClient, ctx, likeCountKey, count, commentID, postID)
-// }
+}
+func GetRankingByDateLatest(redisClient *redis.Client, ctx context.Context, page int) {
+
+}
+func GetRankingByDateEarliest(redisClient *redis.Client, ctx context.Context, page int) {
+
+}

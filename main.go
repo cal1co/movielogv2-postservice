@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	cacheoperations "github.com/cal1co/movielogv2-postservice/rediscache"
@@ -58,12 +60,63 @@ func init() {
 		Password: "",
 		DB:       0,
 	})
+
+}
+
+func MigrateLikesToDB() {
+	ctx := context.Background()
+	cursor := uint64(0)
+	keys := []string{}
+
+	// Scan keys with the "post:*:likes" pattern
+	for {
+		var err error
+		var scanResult []string
+
+		scanResult, cursor, err = redisClient.Scan(ctx, cursor, "post:*:likes", 100).Result()
+		if err != nil {
+			log.Printf("Error scanning Redis keys: %v", err)
+			return
+		}
+		log.Printf("%s", scanResult)
+		keys = append(keys, scanResult...)
+
+		if cursor == 0 {
+			break
+		}
+	}
+
+	for _, key := range keys {
+		// Get the post ID from the key
+		postID := strings.TrimPrefix(strings.TrimSuffix(key, ":likes"), "post:")
+
+		// Get the likes count from Redis
+		likesCount, err := redisClient.Get(ctx, key).Result()
+		if err != nil {
+			log.Printf("Error getting likes for post %s: %v", postID, err)
+			continue
+		}
+		// Update the likes count in Cassandra
+		err = session.Query("UPDATE post_interactions SET likes = ? WHERE post_id = ?", likesCount, postID).Exec()
+		if err != nil {
+			log.Printf("Error updating likes for post %s: %v", postID, err)
+			continue
+		}
+	}
+
 }
 
 const pageSize int = 15
 
 func main() {
 	defer session.Close()
+
+	go func() {
+		for {
+			MigrateLikesToDB()
+			time.Sleep(time.Minute)
+		}
+	}()
 
 	// Initialize Gin
 	r := gin.Default()
@@ -126,12 +179,14 @@ func main() {
 		handleLike(c, true)
 	})
 
-	// GET specific post
 	r.GET("/posts/:id", func(c *gin.Context) {
-		handlePostGet(c)
+		handlePostGet(c, false)
 	})
 
-	// GET user posts - returns first 15
+	r.GET("/comments/:id", func(c *gin.Context) {
+		handlePostGet(c, true)
+	})
+
 	r.GET("/user/:id/posts/", func(c *gin.Context) {
 		uid, err := strconv.Atoi(c.Param("id"))
 		// page := c.Param("page")
@@ -236,12 +291,16 @@ func handleLike(c *gin.Context, comment bool) {
 	c.JSON(http.StatusOK, fmt.Sprintf("Post with id %s has been liked", post_id))
 }
 
-func handlePostGet(c *gin.Context) {
+func handlePostGet(c *gin.Context, comment bool) {
 	post_id := c.Param("id")
-
-	// Retrieve the post from Cassandra
+	var query string
+	if comment {
+		query = `SELECT comment_id, user_id, comment_content, created_at FROM post_comments WHERE comment_id = ? LIMIT 1`
+	} else {
+		query = `SELECT post_id, user_id, post_content, created_at FROM posts WHERE post_id = ? LIMIT 1`
+	}
 	var post Post
-	if err := session.Query(`SELECT post_id, user_id, post_content, created_at FROM posts WHERE post_id = ? LIMIT 1`, post_id).Consistency(gocql.One).Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt); err != nil {
+	if err := session.Query(query, post_id).Consistency(gocql.One).Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, post with id '%s' could not be found", post_id))
 		c.AbortWithStatus(http.StatusNotFound)
