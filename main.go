@@ -68,7 +68,6 @@ func MigrateLikesToDB() {
 	cursor := uint64(0)
 	keys := []string{}
 
-	// Scan keys with the "post:*:likes" pattern
 	for {
 		var err error
 		var scanResult []string
@@ -87,23 +86,18 @@ func MigrateLikesToDB() {
 	}
 
 	for _, key := range keys {
-		// Get the post ID from the key
 		postID := strings.TrimPrefix(strings.TrimSuffix(key, ":likes"), "post:")
-
-		// Get the likes count from Redis
 		likesCount, err := redisClient.Get(ctx, key).Result()
 		if err != nil {
 			log.Printf("Error getting likes for post %s: %v", postID, err)
 			continue
 		}
-		// Update the likes count in Cassandra
 		err = session.Query("UPDATE post_interactions SET likes = ? WHERE post_id = ?", likesCount, postID).Exec()
 		if err != nil {
 			log.Printf("Error updating likes for post %s: %v", postID, err)
 			continue
 		}
 	}
-
 }
 
 const pageSize int = 15
@@ -114,11 +108,10 @@ func main() {
 	go func() {
 		for {
 			MigrateLikesToDB()
-			time.Sleep(time.Minute)
+			time.Sleep(time.Hour)
 		}
 	}()
 
-	// Initialize Gin
 	r := gin.Default()
 
 	r.POST("/post", func(c *gin.Context) {
@@ -130,10 +123,8 @@ func main() {
 			return
 		}
 
-		// Generate a UUID for the post
 		post.ID = gocql.TimeUUID()
 
-		// Insert the post into Cassandra
 		if err := session.Query(`INSERT INTO posts (post_id, user_id, post_content, created_at) VALUES (?, ?, ?, ?)`, post.ID, post.UserID, post.PostContent, time.Now()).Exec(); err != nil {
 			fmt.Println(err)
 			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not post with details %v, %d, %s", post.ID, post.UserID, post.PostContent))
@@ -172,11 +163,18 @@ func main() {
 
 	})
 
-	r.POST("/posts/:id/like", func(c *gin.Context) {
+	r.POST("/post/:id/like", func(c *gin.Context) {
 		handleLike(c, false)
 	})
 	r.POST("/comment/:id/like", func(c *gin.Context) {
 		handleLike(c, true)
+	})
+
+	r.POST("/post/:id/unlike", func(c *gin.Context) {
+		handleUnlike(c, false)
+	})
+	r.POST("/comment/:id/unlike", func(c *gin.Context) {
+		handleUnlike(c, true)
 	})
 
 	r.GET("/posts/:id", func(c *gin.Context) {
@@ -209,25 +207,33 @@ func main() {
 		c.JSON(http.StatusOK, posts)
 	})
 
-	// GET user posts - past latest 15
-	// r.GET("/user/:id/posts/")
-
-	// DELETE /posts/:id
-	// need to delete likes also!
 	r.DELETE("/posts/:id", func(c *gin.Context) {
 		post_id, err := gocql.ParseUUID(c.Param("id"))
 		if err != nil {
-			// handle err
 			fmt.Println(err)
 		}
-
-		// // Delete the post from Cassandra
-		batch := gocql.NewBatch(gocql.LoggedBatch)
-		batch.Query(`DELETE FROM posts WHERE post_id = ?`, post_id)
-		// batch.Query(`DELETE FROM user_likes WHERE post_id = ?`, post_id)
-		// batch.Query(`DELETE FROM post_interactions WHERE post_id = ?`, post_id)
-		if err := session.ExecuteBatch(batch); err != nil {
+		var reqUser ReqUser
+		if err := c.BindJSON(&reqUser); err != nil {
 			fmt.Println(err)
+			c.JSON(http.StatusNotFound, "ERROR WITH JSON UNMARSHAL")
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+
+		iter := session.Query(`SELECT created_at FROM posts WHERE user_id = ? and post_id=?`, reqUser.UserID, post_id).Iter()
+		var timestamp time.Time
+		for iter.Scan(&timestamp) {
+			fmt.Println(timestamp)
+		}
+		if err := iter.Close(); err != nil {
+			fmt.Println(err)
+		}
+		batch := gocql.NewBatch(gocql.LoggedBatch)
+		batch.Query(`DELETE FROM posts WHERE post_id = ? AND user_id=? AND created_at=?`, post_id, reqUser.UserID, timestamp)
+		batch.Query(`DELETE FROM user_likes WHERE post_id = ?`, post_id)
+		batch.Query(`DELETE FROM post_interactions WHERE post_id = ?`, post_id)
+		if err := session.ExecuteBatch(batch); err != nil {
+			fmt.Println("Error with batch:", err)
 			return
 		}
 
@@ -239,6 +245,53 @@ func main() {
 }
 
 func handlePost() {
+
+}
+func handleUnlike(c *gin.Context, comment bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	post_id := c.Param("id")
+	var reqUser ReqUser
+	if err := c.BindJSON(&reqUser); err != nil {
+		fmt.Println(err)
+		c.JSON(http.StatusNotFound, "ERROR WITH JSON UNMARSHAL")
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	var parent string
+	if comment {
+		if err := session.Query(`select parent_post_id from post_comments where comment_id=?`, post_id).Scan(&parent); err != nil {
+			fmt.Println("error checking likes", err)
+			c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
+			return
+		}
+	} else {
+		parent = ""
+	}
+
+	var likeCount int
+	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, post_id, reqUser.UserID).Scan(&likeCount); err != nil {
+		// Handle error
+		fmt.Println("Error checking user likes:", err)
+		c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
+		return
+	}
+	if likeCount == 0 {
+		// Post has already been liked by the user
+		c.JSON(http.StatusBadRequest, "Sorry, you have not liked this post yet.")
+		return
+	}
+
+	cacheoperations.Unlike(post_id, redisClient, ctx, c, session, comment, parent)
+
+	if err := session.Query(`DELETE FROM user_likes WHERE user_id=? AND post_id=?`, reqUser.UserID, post_id).Exec(); err != nil {
+		fmt.Println(err)
+		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not like post with id %s", post_id))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
+	c.JSON(http.StatusOK, fmt.Sprintf("Post with id %s has been unliked", post_id))
 
 }
 

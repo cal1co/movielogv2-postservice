@@ -11,20 +11,17 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// // Increment the post's like counter in Cassandra
-// // needs to batch instead
-// if err := session.Query(`UPDATE post_interactions SET likes = likes + 1 WHERE post_id = ?`, post_id).Exec(); err != nil {
-// 	fmt.Println(err)
-// 	c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not like post with id %s", post_id))
-// 	c.AbortWithStatus(http.StatusInternalServerError)
-// 	return
-// }
-
 func ThrowLikeError(c *gin.Context, err error) {
 	fmt.Println(err)
 	c.JSON(http.StatusNotFound, "Error Liking post")
 	c.AbortWithStatus(http.StatusBadRequest)
 }
+func ThrowUnlikeError(c *gin.Context, err error) {
+	fmt.Println(err)
+	c.JSON(http.StatusNotFound, "Error Unliking post")
+	c.AbortWithStatus(http.StatusBadRequest)
+}
+
 func GetPostLikes(postID string, redisClient *redis.Client, ctx context.Context, session *gocql.Session) int {
 	likeCountKey := fmt.Sprintf("post:%s:likes", postID)
 	isCached, err := redisClient.Exists(ctx, likeCountKey).Result()
@@ -46,7 +43,6 @@ func GetPostLikes(postID string, redisClient *redis.Client, ctx context.Context,
 		redisClient.Expire(ctx, likeCountKey, time.Hour).Result()
 		return likeCount
 	}
-
 }
 func Like(postID string, redisClient *redis.Client, ctx context.Context, c *gin.Context, session *gocql.Session, comment bool, parentID string) int {
 	likeCountKey := fmt.Sprintf("post:%s:likes", postID)
@@ -60,23 +56,23 @@ func Like(postID string, redisClient *redis.Client, ctx context.Context, c *gin.
 		ThrowLikeError(c, err)
 	}
 	if comment {
-		UpdateRanking(redisClient, ctx, likeCountKey, likeCount, postID, parentID)
+		UpdateRanking(redisClient, ctx, likeCountKey, likeCount, postID, parentID, float64(1))
 	}
 	return likeCount
 }
-
-func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey string, count int, commentID string, postID string) {
+func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey string, count int, commentID string, postID string, incrAmt float64) {
 	parentPostId := fmt.Sprintf("post:%s:comments", postID)
 	exists, err := redisClient.ZScore(ctx, parentPostId, commentID).Result()
+	if err != nil {
+		fmt.Println(err)
+	}
 	if exists == 0 {
 		redisClient.ZAdd(ctx, parentPostId, redis.Z{
 			Score:  float64(count),
 			Member: commentID,
 		})
-	} else if err != nil {
-		fmt.Println(err)
 	} else {
-		_, err := redisClient.ZIncrBy(ctx, parentPostId, float64(1), commentID).Result()
+		_, err := redisClient.ZIncrBy(ctx, parentPostId, incrAmt, commentID).Result()
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -88,6 +84,23 @@ func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey 
 	for i, comment := range comments {
 		fmt.Printf("Comment %d: %s - %f likes\n", i+1, comment.Member.(string), comment.Score)
 	}
+}
+
+func Unlike(postID string, redisClient *redis.Client, ctx context.Context, c *gin.Context, session *gocql.Session, comment bool, parentID string) int {
+	likeCountKey := fmt.Sprintf("post:%s:likes", postID)
+	GetPostLikes(postID, redisClient, ctx, session)
+	err := redisClient.Decr(ctx, likeCountKey).Err()
+	if err != nil {
+		ThrowUnlikeError(c, err)
+	}
+	likeCount, err := redisClient.Get(ctx, likeCountKey).Int()
+	if err != nil {
+		ThrowUnlikeError(c, err)
+	}
+	if comment {
+		UpdateRanking(redisClient, ctx, likeCountKey, likeCount, postID, parentID, float64(-1))
+	}
+	return likeCount
 }
 
 func GetRankingByLikes(redisClient *redis.Client, ctx context.Context, page int) {
