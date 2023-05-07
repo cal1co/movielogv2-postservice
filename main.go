@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gocql/gocql"
 	"github.com/golang-jwt/jwt"
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
@@ -20,7 +22,6 @@ var session *gocql.Session
 var redisClient *redis.Client
 
 func init() {
-	// Connect to Cassandra
 	cluster := gocql.NewCluster("127.0.0.1")
 	cluster.Keyspace = "user_posts"
 	var err error
@@ -75,17 +76,13 @@ func MigrateLikesToDB() {
 }
 
 func rateLimiterMiddleware() gin.HandlerFunc {
-	// set up the rate limiter
 	limiter := rate.NewLimiter(1, 5)
 
 	return func(c *gin.Context) {
-		// check if the limiter allows the request
 		if limiter.Allow() == false {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
 			return
 		}
-
-		// move on to the next middleware/handler
 		c.Next()
 	}
 }
@@ -94,7 +91,7 @@ func verifyToken(tokenString string) (*jwt.Token, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return []byte(""), nil
+		return []byte(os.Getenv("SECRET_TOKEN")), nil
 	})
 }
 
@@ -126,6 +123,13 @@ func authMiddleware() gin.HandlerFunc {
 
 const pageSize int = 15
 
+func loadEnv() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+}
+
 func main() {
 	defer session.Close()
 
@@ -136,6 +140,7 @@ func main() {
 		}
 	}()
 
+	loadEnv()
 	r := gin.Default()
 
 	r.Use(rateLimiterMiddleware())
@@ -150,7 +155,11 @@ func main() {
 	})
 
 	r.POST("/post/:id/comment", func(c *gin.Context) {
-		handlers.HandleComment(c, session)
+		handlers.HandleComment(c, session, redisClient, false)
+	})
+
+	r.POST("/comment/:id/comment", func(c *gin.Context) {
+		handlers.HandleComment(c, session, redisClient, true)
 	})
 
 	r.POST("/post/:id/like", func(c *gin.Context) {
@@ -185,6 +194,5 @@ func main() {
 		handlers.HandlePostDelete(c, session)
 	})
 
-	// Run the server
 	r.Run()
 }

@@ -56,11 +56,11 @@ func Like(postID string, redisClient *redis.Client, ctx context.Context, c *gin.
 		ThrowLikeError(c, err)
 	}
 	if comment {
-		UpdateRanking(redisClient, ctx, likeCountKey, likeCount, postID, parentID, float64(1))
+		UpdateLikeRanking(redisClient, ctx, likeCount, postID, parentID, float64(1))
 	}
 	return likeCount
 }
-func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey string, count int, commentID string, postID string, incrAmt float64) {
+func UpdateLikeRanking(redisClient *redis.Client, ctx context.Context, count int, commentID string, postID string, incrAmt float64) {
 	parentPostId := fmt.Sprintf("post:%s:comments", postID)
 	exists, err := redisClient.ZScore(ctx, parentPostId, commentID).Result()
 	if err != nil {
@@ -85,7 +85,6 @@ func UpdateRanking(redisClient *redis.Client, ctx context.Context, likeCountKey 
 		fmt.Printf("Comment %d: %s - %f likes\n", i+1, comment.Member.(string), comment.Score)
 	}
 }
-
 func Unlike(postID string, redisClient *redis.Client, ctx context.Context, c *gin.Context, session *gocql.Session, comment bool, parentID string) int {
 	likeCountKey := fmt.Sprintf("post:%s:likes", postID)
 	GetPostLikes(postID, redisClient, ctx, session)
@@ -98,7 +97,7 @@ func Unlike(postID string, redisClient *redis.Client, ctx context.Context, c *gi
 		ThrowUnlikeError(c, err)
 	}
 	if comment {
-		UpdateRanking(redisClient, ctx, likeCountKey, likeCount, postID, parentID, float64(-1))
+		UpdateLikeRanking(redisClient, ctx, likeCount, postID, parentID, float64(-1))
 	}
 	return likeCount
 }
