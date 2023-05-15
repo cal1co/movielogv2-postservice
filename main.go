@@ -10,6 +10,7 @@ import (
 	"time"
 
 	handlers "github.com/cal1co/movielogv2-postservice/handlers"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gocql/gocql"
 	"github.com/golang-jwt/jwt"
@@ -58,6 +59,18 @@ func MigrateLikesToDB() {
 		if cursor == 0 {
 			break
 		}
+
+		scanResult, cursor, err = redisClient.Scan(ctx, cursor, "post:*:comments", 100).Result()
+		if err != nil {
+			log.Printf("Error scanning Redis keys: %v", err)
+			return
+		}
+		log.Printf("%s", scanResult)
+		keys = append(keys, scanResult...)
+
+		if cursor == 0 {
+			break
+		}
 	}
 
 	for _, key := range keys {
@@ -76,6 +89,7 @@ func MigrateLikesToDB() {
 }
 
 func rateLimiterMiddleware() gin.HandlerFunc {
+	fmt.Println("LIMITER CALLED")
 	limiter := rate.NewLimiter(1, 5)
 
 	return func(c *gin.Context) {
@@ -96,6 +110,7 @@ func verifyToken(tokenString string) (*jwt.Token, error) {
 }
 
 func authMiddleware() gin.HandlerFunc {
+	fmt.Println("GETTING USER")
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -121,6 +136,24 @@ func authMiddleware() gin.HandlerFunc {
 	}
 }
 
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// c.Header("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
+
+		if c.Request.Method == "OPTIONS" {
+			fmt.Println(c.Request)
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	}
+}
+
 const pageSize int = 15
 
 func loadEnv() {
@@ -142,7 +175,12 @@ func main() {
 
 	loadEnv()
 	r := gin.Default()
-
+	config := cors.DefaultConfig()
+	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	config.AddAllowHeaders("Authorization")
+	config.AllowOrigins = []string{"http://localhost:5173"}
+	r.Use(cors.New(config))
+	// r.Use(corsMiddleware())
 	r.Use(rateLimiterMiddleware())
 	r.Use(authMiddleware())
 
@@ -178,6 +216,10 @@ func main() {
 		handlers.HandleUnlike(c, true, session, redisClient)
 	})
 
+	r.GET("/feed/user/:id", func(c *gin.Context) {
+		handlers.GetUserPosts(c, session)
+	})
+
 	r.GET("/posts/:id", func(c *gin.Context) {
 		handlers.HandlePostGet(c, false, session, redisClient)
 	})
@@ -186,9 +228,6 @@ func main() {
 		handlers.HandlePostGet(c, true, session, redisClient)
 	})
 
-	r.GET("/user/:id/posts/", func(c *gin.Context) {
-		handlers.GetUserPosts(c, session)
-	})
 	// this doesnt delete from redis right now
 	r.DELETE("/posts/:id", func(c *gin.Context) {
 		handlers.HandlePostDelete(c, session)

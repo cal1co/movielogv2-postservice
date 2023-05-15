@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	cacheoperations "github.com/cal1co/movielogv2-postservice/rediscache"
@@ -236,15 +235,18 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 	c.JSON(http.StatusOK, post)
 }
 func GetUserPosts(c *gin.Context, session *gocql.Session) {
-	uid, err := strconv.Atoi(c.Param("id"))
-	// page := c.Param("page")
-	if err != nil {
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
-	}
-	// offset := (pageNum - 1) * 15
+	fmt.Println("GETTING POSTS!")
+	// userID, exists := c.Get("user_id")
+	// if !exists {
+	// 	fmt.Println(userID, exists)
+	// 	c.JSON(http.StatusNotFound, "Couldn't extract uid")
+	// 	c.AbortWithStatus(http.StatusBadRequest)
+	// return
+	// }
+	uid := c.Param("id")
+	// uid := int(userID.(float64))
 	var posts []Post
-	iter := session.Query(`SELECT post_id, post_content, created_at, user_id FROM posts WHERE user_id = ? LIMIT 15;`, uid).Iter()
+	iter := session.Query(`SELECT post_id, post_content, created_at, user_id FROM posts WHERE user_id = ? AND created_at < ? LIMIT 12;`, uid, time.Now()).Iter()
 	var post Post
 	for iter.Scan(&post.ID, &post.PostContent, &post.CreatedAt, &post.UserID) {
 		posts = append(posts, post)
@@ -255,6 +257,7 @@ func GetUserPosts(c *gin.Context, session *gocql.Session) {
 		c.AbortWithStatus(http.StatusNotFound)
 	}
 	c.JSON(http.StatusOK, posts)
+	return
 }
 func HandlePostDelete(c *gin.Context, session *gocql.Session) {
 	post_id, err := gocql.ParseUUID(c.Param("id"))
