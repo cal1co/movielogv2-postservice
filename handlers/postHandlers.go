@@ -21,6 +21,11 @@ type Post struct {
 	Comments    int        `json:"comments_count"`
 }
 
+type PostRes struct {
+	Post
+	Liked bool `json:"liked"`
+}
+
 type Comment struct {
 	ID          gocql.UUID `json:"comment_id"`
 	UserID      int        `json:"user_id"`
@@ -153,16 +158,16 @@ func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisCli
 		return
 	}
 
-	cacheoperations.Unlike(post_id, redisClient, ctx, c, session, comment, parent)
+	likes := cacheoperations.Unlike(post_id, redisClient, ctx, c, session, comment, parent)
 
 	if err := session.Query(`DELETE FROM user_likes WHERE user_id=? AND post_id=?`, uid, post_id).Exec(); err != nil {
 		fmt.Println(err)
-		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not like post with id %s", post_id))
+		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not unlike post with id %s", post_id))
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
-	c.JSON(http.StatusOK, fmt.Sprintf("Post with id %s has been unliked", post_id))
+	c.JSON(http.StatusOK, likes)
 }
 func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -198,7 +203,7 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 		return
 	}
 
-	cacheoperations.Like(post_id, redisClient, ctx, c, session, comment, parent)
+	likes := cacheoperations.Like(post_id, redisClient, ctx, c, session, comment, parent)
 
 	if err := session.Query(`INSERT INTO user_likes (user_id, post_id, created_at) VALUES (?, ?, ?)`, uid, post_id, time.Now()).Exec(); err != nil {
 		fmt.Println(err)
@@ -207,7 +212,7 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 		return
 	}
 
-	c.JSON(http.StatusOK, fmt.Sprintf("Post with id %s has been liked", post_id))
+	c.JSON(http.StatusOK, likes)
 }
 func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
 	post_id := c.Param("id")
@@ -234,21 +239,34 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 	fmt.Println("POST: ", post)
 	c.JSON(http.StatusOK, post)
 }
-func GetUserPosts(c *gin.Context, session *gocql.Session) {
-	fmt.Println("GETTING POSTS!")
-	// userID, exists := c.Get("user_id")
-	// if !exists {
-	// 	fmt.Println(userID, exists)
-	// 	c.JSON(http.StatusNotFound, "Couldn't extract uid")
-	// 	c.AbortWithStatus(http.StatusBadRequest)
-	// return
-	// }
+func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
+
+	var likeCount int
+	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, postId, uid).Scan(&likeCount); err != nil {
+		fmt.Println("Error checking user likes:", err)
+		return false
+	}
+	if likeCount > 0 {
+		return true
+	} else {
+		return false
+	}
+}
+func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
 	uid := c.Param("id")
-	// uid := int(userID.(float64))
-	var posts []Post
+	var posts []PostRes
 	iter := session.Query(`SELECT post_id, post_content, created_at, user_id FROM posts WHERE user_id = ? AND created_at < ? LIMIT 12;`, uid, time.Now()).Iter()
-	var post Post
+	var post PostRes
 	for iter.Scan(&post.ID, &post.PostContent, &post.CreatedAt, &post.UserID) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, session)
+		post.Likes = like_count
+		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, session)
+		post.Comments = comment_count
+
+		post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
+
 		posts = append(posts, post)
 	}
 	if err := iter.Close(); err != nil {
@@ -256,6 +274,7 @@ func GetUserPosts(c *gin.Context, session *gocql.Session) {
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not fetch post results for user with id %v", uid))
 		c.AbortWithStatus(http.StatusNotFound)
 	}
+
 	c.JSON(http.StatusOK, posts)
 	return
 }

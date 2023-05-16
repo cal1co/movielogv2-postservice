@@ -89,7 +89,6 @@ func MigrateLikesToDB() {
 }
 
 func rateLimiterMiddleware() gin.HandlerFunc {
-	fmt.Println("LIMITER CALLED")
 	limiter := rate.NewLimiter(1, 5)
 
 	return func(c *gin.Context) {
@@ -110,10 +109,11 @@ func verifyToken(tokenString string) (*jwt.Token, error) {
 }
 
 func authMiddleware() gin.HandlerFunc {
-	fmt.Println("GETTING USER")
 	return func(c *gin.Context) {
+		fmt.Println("GETTING USER")
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
+			fmt.Println("NO AUTH HEADER", c.Request)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			return
 		}
@@ -136,26 +136,6 @@ func authMiddleware() gin.HandlerFunc {
 	}
 }
 
-func corsMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// c.Header("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
-
-		if c.Request.Method == "OPTIONS" {
-			fmt.Println(c.Request)
-			c.AbortWithStatus(204)
-			return
-		}
-
-		c.Next()
-	}
-}
-
-const pageSize int = 15
-
 func loadEnv() {
 	err := godotenv.Load()
 	if err != nil {
@@ -175,17 +155,18 @@ func main() {
 
 	loadEnv()
 	r := gin.Default()
+
 	config := cors.DefaultConfig()
-	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	config.AllowMethods = []string{"GET", "POST", "DELETE", "OPTIONS"}
 	config.AddAllowHeaders("Authorization")
 	config.AllowOrigins = []string{"http://localhost:5173"}
 	r.Use(cors.New(config))
-	// r.Use(corsMiddleware())
+
 	r.Use(rateLimiterMiddleware())
 	r.Use(authMiddleware())
 
-	r.GET("/", func(c *gin.Context) {
-
+	r.POST("/", func(c *gin.Context) {
+		fmt.Println("post to /")
 	})
 
 	r.POST("/post", func(c *gin.Context) {
@@ -200,11 +181,11 @@ func main() {
 		handlers.HandleComment(c, session, redisClient, true)
 	})
 
-	r.POST("/post/:id/like", func(c *gin.Context) {
+	r.POST("/post/like/:id", func(c *gin.Context) {
 		handlers.HandleLike(c, false, session, redisClient)
 	})
 
-	r.POST("/post/:id/unlike", func(c *gin.Context) {
+	r.POST("/post/unlike/:id", func(c *gin.Context) {
 		handlers.HandleUnlike(c, false, session, redisClient)
 	})
 
@@ -217,7 +198,7 @@ func main() {
 	})
 
 	r.GET("/feed/user/:id", func(c *gin.Context) {
-		handlers.GetUserPosts(c, session)
+		handlers.GetUserPosts(c, session, redisClient)
 	})
 
 	r.GET("/posts/:id", func(c *gin.Context) {
