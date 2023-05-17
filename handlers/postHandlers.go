@@ -44,6 +44,20 @@ type ReqUser struct {
 	UserID int `json:"user_id"`
 }
 
+func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
+
+	var likeCount int
+	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, postId, uid).Scan(&likeCount); err != nil {
+		fmt.Println("Error checking user likes:", err)
+		return false
+	}
+	if likeCount > 0 {
+		return true
+	} else {
+		return false
+	}
+}
+
 func HandlePost(c *gin.Context, session *gocql.Session) {
 	var post Post
 	if err := c.BindJSON(&post); err != nil {
@@ -121,8 +135,9 @@ func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Cl
 	comment.Comments = 0
 
 	cacheoperations.Comment(comment.ParentID.String(), redisClient, ctx, c, session, parent)
+	comment_count := cacheoperations.GetPostComments(comment.ParentID.String(), redisClient, ctx, session)
 
-	c.JSON(http.StatusCreated, comment)
+	c.JSON(http.StatusCreated, comment_count)
 }
 func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -239,19 +254,7 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 	fmt.Println("POST: ", post)
 	c.JSON(http.StatusOK, post)
 }
-func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
 
-	var likeCount int
-	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, postId, uid).Scan(&likeCount); err != nil {
-		fmt.Println("Error checking user likes:", err)
-		return false
-	}
-	if likeCount > 0 {
-		return true
-	} else {
-		return false
-	}
-}
 func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
 	uid := c.Param("id")
 	var posts []PostRes
@@ -278,6 +281,31 @@ func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Cli
 	c.JSON(http.StatusOK, posts)
 	return
 }
+func GetPostComments(c *gin.Context, session *gocql.Session) {
+	post_id := c.Param("id")
+	var comments []Comment
+	iter := session.Query(`SELECT comment_id, comment_content, created_at, user_id FROM post_comments WHERE parent_post_id = ? LIMIT 10;`, post_id).Iter()
+	var comment Comment
+	for iter.Scan(&comment.ID, &comment.PostContent, &comment.CreatedAt, &comment.UserID) {
+		uuid, err := gocql.ParseUUID(post_id)
+		if err != nil {
+			fmt.Println(err)
+			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not fetch comments results for post with id %v", post_id))
+			c.AbortWithStatus(http.StatusNotFound)
+		}
+		comment.ParentID = uuid
+		comments = append(comments, comment)
+	}
+	if err := iter.Close(); err != nil {
+		fmt.Println(err)
+		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not fetch comments results for post with id %v", post_id))
+		c.AbortWithStatus(http.StatusNotFound)
+	}
+
+	c.JSON(http.StatusOK, comments)
+	return
+}
+
 func HandlePostDelete(c *gin.Context, session *gocql.Session) {
 	post_id, err := gocql.ParseUUID(c.Param("id"))
 	if err != nil {

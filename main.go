@@ -176,7 +176,9 @@ func main() {
 	r.POST("/post/:id/comment", func(c *gin.Context) {
 		handlers.HandleComment(c, session, redisClient, false)
 	})
-
+	r.GET("/post/:id/comments", func(c *gin.Context) {
+		handlers.GetPostComments(c, session)
+	})
 	r.POST("/comment/:id/comment", func(c *gin.Context) {
 		handlers.HandleComment(c, session, redisClient, true)
 	})
