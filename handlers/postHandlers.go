@@ -44,6 +44,15 @@ type ReqUser struct {
 	UserID int `json:"user_id"`
 }
 
+func throwError(message string, c *gin.Context) {
+	c.JSON(http.StatusNotFound, message)
+	c.AbortWithStatus(http.StatusBadRequest)
+}
+func ThrowUserIDExtractError(c *gin.Context) {
+	c.JSON(http.StatusNotFound, "Couldn't extract uid")
+	c.AbortWithStatus(http.StatusBadRequest)
+}
+
 func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
 
 	var likeCount int
@@ -59,22 +68,20 @@ func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
 }
 
 func HandlePost(c *gin.Context, session *gocql.Session) {
-	var post Post
-	if err := c.BindJSON(&post); err != nil {
-		fmt.Println(err)
-		c.JSON(http.StatusNotFound, "ERROR WITH JSON UNMARSHAL")
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
-	}
-
 	userID, exists := c.Get("user_id")
 	if !exists {
-		fmt.Println(userID, exists)
-		c.JSON(http.StatusNotFound, "Couldn't extract uid")
-		c.AbortWithStatus(http.StatusBadRequest)
+		ThrowUserIDExtractError(c)
 		return
 	}
 	uid := int(userID.(float64))
+
+	var post Post
+	if err := c.BindJSON(&post); err != nil {
+		fmt.Println(err)
+		throwError("ERROR WITH JSON UNMARSHAL", c)
+		return
+	}
+
 	post.UserID = uid
 	post.ID = gocql.TimeUUID()
 
@@ -101,9 +108,7 @@ func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Cl
 	comment.ID = gocql.TimeUUID()
 	userID, exists := c.Get("user_id")
 	if !exists {
-		fmt.Println(userID, exists)
-		c.JSON(http.StatusNotFound, "Couldn't extract uid")
-		c.AbortWithStatus(http.StatusBadRequest)
+		ThrowUserIDExtractError(c)
 		return
 	}
 	uid := int(userID.(float64))
@@ -145,9 +150,7 @@ func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisCli
 	post_id := c.Param("id")
 	userID, exists := c.Get("user_id")
 	if !exists {
-		fmt.Println(userID, exists)
-		c.JSON(http.StatusNotFound, "Couldn't extract uid")
-		c.AbortWithStatus(http.StatusBadRequest)
+		ThrowUserIDExtractError(c)
 		return
 	}
 	uid := int(userID.(float64))
@@ -190,9 +193,7 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 	post_id := c.Param("id")
 	userID, exists := c.Get("user_id")
 	if !exists {
-		fmt.Println(userID, exists)
-		c.JSON(http.StatusNotFound, "Couldn't extract uid")
-		c.AbortWithStatus(http.StatusBadRequest)
+		ThrowUserIDExtractError(c)
 		return
 	}
 	uid := int(userID.(float64))
@@ -286,13 +287,13 @@ func GetPostComments(c *gin.Context, session *gocql.Session) {
 	var comments []Comment
 	iter := session.Query(`SELECT comment_id, comment_content, created_at, user_id FROM post_comments WHERE parent_post_id = ? LIMIT 10;`, post_id).Iter()
 	var comment Comment
+	uuid, err := gocql.ParseUUID(post_id)
+	if err != nil {
+		fmt.Println(err)
+		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not fetch comments results for post with id %v", post_id))
+		c.AbortWithStatus(http.StatusNotFound)
+	}
 	for iter.Scan(&comment.ID, &comment.PostContent, &comment.CreatedAt, &comment.UserID) {
-		uuid, err := gocql.ParseUUID(post_id)
-		if err != nil {
-			fmt.Println(err)
-			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not fetch comments results for post with id %v", post_id))
-			c.AbortWithStatus(http.StatusNotFound)
-		}
 		comment.ParentID = uuid
 		comments = append(comments, comment)
 	}
@@ -313,9 +314,7 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session) {
 	}
 	userID, exists := c.Get("user_id")
 	if !exists {
-		fmt.Println(userID, exists)
-		c.JSON(http.StatusNotFound, "Couldn't extract uid")
-		c.AbortWithStatus(http.StatusBadRequest)
+		ThrowUserIDExtractError(c)
 		return
 	}
 	uid := int(userID.(float64))
