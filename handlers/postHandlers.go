@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -255,7 +256,6 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 	fmt.Println("POST: ", post)
 	c.JSON(http.StatusOK, post)
 }
-
 func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
 	uid := c.Param("id")
 	var posts []PostRes
@@ -264,9 +264,10 @@ func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Cli
 	for iter.Scan(&post.ID, &post.PostContent, &post.CreatedAt, &post.UserID) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
 		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, session)
-		post.Likes = like_count
 		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, session)
+		post.Likes = like_count
 		post.Comments = comment_count
 
 		post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
@@ -307,34 +308,70 @@ func GetPostComments(c *gin.Context, session *gocql.Session) {
 	return
 }
 
-func HandlePostDelete(c *gin.Context, session *gocql.Session) {
-	post_id, err := gocql.ParseUUID(c.Param("id"))
-	if err != nil {
-		fmt.Println(err)
-	}
+type CommentBatchDelete struct {
+	comment_id string
+	user_id    string
+	created_at time.Time
+	parent     string
+}
+
+func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
 	userID, exists := c.Get("user_id")
 	if !exists {
 		ThrowUserIDExtractError(c)
 		return
 	}
 	uid := int(userID.(float64))
+	postId := c.Param("id")
+	iter := session.Query(`SELECT created_at FROM posts WHERE user_id=? and post_id=?`, uid, postId).Iter()
+	var parentCreateTime time.Time
+	var commentList []CommentBatchDelete
+	for iter.Scan(&parentCreateTime) {
+		fmt.Println("post with id:", parentCreateTime)
+		commentList = getAllCommentDependents(postId, session)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	b := session.NewBatch(gocql.UnloggedBatch).WithContext(ctx)
+	b.Entries = append(b.Entries, gocql.BatchEntry{
+		Stmt:       "DELETE FROM posts WHERE post_id=? AND user_id=? and created_at=?;",
+		Args:       []interface{}{postId, uid, parentCreateTime},
+		Idempotent: true,
+	})
+	b.Entries = append(b.Entries, gocql.BatchEntry{
+		Stmt:       "DELETE FROM post_interactions WHERE post_id=?;",
+		Args:       []interface{}{postId},
+		Idempotent: true,
+	})
+	for i := 0; i < len(commentList); i++ {
+		b.Entries = append(b.Entries, gocql.BatchEntry{
+			Stmt:       "DELETE FROM post_comments WHERE comment_id=? AND user_id=? and parent_post_id=?;",
+			Args:       []interface{}{commentList[i].comment_id, commentList[i].user_id, commentList[i].parent},
+			Idempotent: true,
+		})
+		b.Entries = append(b.Entries, gocql.BatchEntry{
+			Stmt:       "DELETE FROM post_interactions WHERE post_id=?;",
+			Args:       []interface{}{commentList[i].comment_id},
+			Idempotent: true,
+		})
+	}
+	err := session.ExecuteBatch(b)
+	if err != nil {
+		log.Fatal(err)
+	}
+	c.JSON(http.StatusOK, fmt.Sprintf("Deleted post with id %s", postId))
+}
 
-	iter := session.Query(`SELECT created_at FROM posts WHERE user_id = ? and post_id=?`, uid, post_id).Iter()
-	var timestamp time.Time
-	for iter.Scan(&timestamp) {
-		fmt.Println(timestamp)
+func getAllCommentDependents(post_id string, session *gocql.Session) []CommentBatchDelete {
+	var comments []CommentBatchDelete
+	iter := session.Query(`select comment_id, created_at, user_id, parent_post_id from post_comments where parent_post_id=?`, post_id).Iter()
+	var comment CommentBatchDelete
+	for iter.Scan(&comment.comment_id, &comment.created_at, &comment.user_id, &comment.parent) {
+		comments = append(comments, comment)
+		comments = append(comments, getAllCommentDependents(comment.comment_id, session)...)
 	}
 	if err := iter.Close(); err != nil {
 		fmt.Println(err)
 	}
-	batch := gocql.NewBatch(gocql.LoggedBatch)
-	batch.Query(`DELETE FROM posts WHERE post_id = ? AND user_id=? AND created_at=?`, post_id, uid, timestamp)
-	batch.Query(`DELETE FROM user_likes WHERE post_id = ?`, post_id)
-	batch.Query(`DELETE FROM post_interactions WHERE post_id = ?`, post_id)
-	if err := session.ExecuteBatch(batch); err != nil {
-		fmt.Println("Error with batch:", err)
-		return
-	}
-
-	c.JSON(http.StatusOK, fmt.Sprintf("Deleted post with id %s", post_id))
+	return comments
 }

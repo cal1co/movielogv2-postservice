@@ -21,7 +21,6 @@ func ThrowDeleteCommentError(c *gin.Context, err error) {
 	c.JSON(http.StatusNotFound, "Error deleting comment post")
 	c.AbortWithStatus(http.StatusBadRequest)
 }
-
 func GetPostComments(postID string, redisClient *redis.Client, ctx context.Context, session *gocql.Session) int {
 	commentCountKey := fmt.Sprintf("post:%s:commentcount", postID)
 	isCached, err := redisClient.Exists(ctx, commentCountKey).Result()

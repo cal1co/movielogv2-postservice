@@ -85,6 +85,11 @@ func MigrateLikesToDB() {
 			log.Printf("Error updating likes for post %s: %v", postID, err)
 			continue
 		}
+		// err = session.Query("UPDATE post_interactions SET comments = ? WHERE post_id = ?", commentCount, postID).Exec()
+		// if err != nil {
+		// 	log.Printf("Error updating likes for post %s: %v", postID, err)
+		// 	continue
+		// }
 	}
 }
 
@@ -213,7 +218,7 @@ func main() {
 
 	// this doesnt delete from redis right now
 	r.DELETE("/posts/:id", func(c *gin.Context) {
-		handlers.HandlePostDelete(c, session)
+		handlers.HandlePostDelete(c, session, redisClient)
 	})
 
 	r.Run()
