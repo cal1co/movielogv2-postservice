@@ -5,20 +5,18 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	handlers "github.com/cal1co/movielogv2-postservice/handlers"
+	middleware "github.com/cal1co/movielogv2-postservice/middleware"
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gocql/gocql"
-	"github.com/golang-jwt/jwt"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/time/rate"
 )
 
 var session *gocql.Session
@@ -95,51 +93,6 @@ func MigrateLikesToDB() {
 	}
 }
 
-func rateLimiterMiddleware() gin.HandlerFunc {
-	limiter := rate.NewLimiter(1, 5)
-
-	return func(c *gin.Context) {
-		if limiter.Allow() == false {
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
-			return
-		}
-		c.Next()
-	}
-}
-func verifyToken(tokenString string) (*jwt.Token, error) {
-	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(os.Getenv("SECRET_TOKEN")), nil
-	})
-}
-func authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			fmt.Println("NO AUTH HEADER", c.Request)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-			return
-		}
-		tokenString := strings.Replace(authHeader, "Bearer ", "", 1)
-
-		token, err := verifyToken(tokenString)
-		if err != nil {
-			log.Printf("error: %s", err)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization token"})
-			return
-		}
-		userID := token.Claims.(jwt.MapClaims)["id"].(float64)
-		c.Set("user_id", userID)
-		_, exists := c.Get("user_id")
-		if !exists {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization token"})
-			return
-		}
-		c.Next()
-	}
-}
 func loadEnv() {
 	err := godotenv.Load()
 	if err != nil {
@@ -158,12 +111,14 @@ func main() {
 	}()
 
 	loadEnv()
+
 	r := gin.Default()
 
 	config := cors.DefaultConfig()
 	config.AllowMethods = []string{"GET", "POST", "DELETE", "OPTIONS"}
 	config.AddAllowHeaders("Authorization")
 	config.AllowOrigins = []string{"http://localhost:5173"}
+
 	r.Use(cors.New(config))
 
 	cert, _ := ioutil.ReadFile(os.Getenv("ELASTIC_CERT_PATH"))
@@ -179,8 +134,8 @@ func main() {
 		return
 	}
 
-	r.Use(rateLimiterMiddleware())
-	r.Use(authMiddleware())
+	r.Use(middleware.RateLimiterMiddleware())
+	r.Use(middleware.AuthMiddleware())
 
 	r.POST("/", func(c *gin.Context) {
 		fmt.Println("post to /")
@@ -226,6 +181,10 @@ func main() {
 
 	r.GET("/comments/:id", func(c *gin.Context) {
 		handlers.HandlePostGet(c, true, session, redisClient)
+	})
+
+	r.POST("/posts/search", func(c *gin.Context) {
+		handlers.HandleSearch(c, es)
 	})
 
 	r.DELETE("/posts/:id", func(c *gin.Context) {

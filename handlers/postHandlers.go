@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -22,12 +24,10 @@ type Post struct {
 	Likes       int        `json:"like_count"`
 	Comments    int        `json:"comments_count"`
 }
-
 type PostRes struct {
 	Post
 	Liked bool `json:"liked"`
 }
-
 type Comment struct {
 	ID          gocql.UUID `json:"comment_id"`
 	UserID      int        `json:"user_id"`
@@ -54,7 +54,6 @@ func ThrowUserIDExtractError(c *gin.Context) {
 	c.JSON(http.StatusNotFound, "Couldn't extract uid")
 	c.AbortWithStatus(http.StatusBadRequest)
 }
-
 func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
 
 	var likeCount int
@@ -68,7 +67,6 @@ func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
 		return false
 	}
 }
-
 func HandlePost(c *gin.Context, session *gocql.Session) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -324,6 +322,7 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 	}
 	uid := int(userID.(float64))
 	postId := c.Param("id")
+
 	var parentCreateTime time.Time
 	var commentList []CommentBatchDelete
 
@@ -382,7 +381,6 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 
 	c.JSON(http.StatusOK, fmt.Sprintf("Deleted post with id %s", postId))
 }
-
 func getAllCommentDependents(post_id string, session *gocql.Session) []CommentBatchDelete {
 	var comments []CommentBatchDelete
 	var comment CommentBatchDelete
@@ -396,4 +394,86 @@ func getAllCommentDependents(post_id string, session *gocql.Session) []CommentBa
 		fmt.Println(err)
 	}
 	return comments
+}
+
+type Search struct {
+	Query string
+}
+
+func HandleSearch(c *gin.Context, es *elasticsearch.Client) {
+
+	// userID, exists := c.Get("user_id")
+	// if !exists {
+	// 	ThrowUserIDExtractError(c)
+	// 	return
+	// }
+	// uid := int(userID.(float64))
+	// fmt.Println(c.Keys["user_id"])
+	var search Search
+	if err := c.BindJSON(&search); err != nil {
+		fmt.Println(err)
+		throwError("ERROR WITH JSON UNMARSHAL", c)
+		return
+	}
+
+	fmt.Printf("%s\n", search)
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"match": map[string]interface{}{
+				"post_content": map[string]interface{}{
+					"query":     search.Query,
+					"fuzziness": "AUTO",
+				},
+			},
+		},
+		"highlight": map[string]interface{}{
+			"fields": map[string]interface{}{
+				"post_content": struct{}{},
+			},
+		},
+	}
+
+	queryJSON, err := json.Marshal(query)
+	if err != nil {
+		fmt.Printf("Error marshaling query: %s\n", err)
+		return
+	}
+	fmt.Println(queryJSON)
+
+	req := esapi.SearchRequest{
+		Index: []string{"posts"},
+		Body:  bytes.NewReader(queryJSON),
+	}
+
+	res, err := req.Do(context.Background(), es)
+	if err != nil {
+		fmt.Printf("Error performing search request: %s\n", err)
+		return
+	}
+
+	if res.IsError() {
+		fmt.Printf("Error executing search: %s\n", res.Status())
+		return
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {
+		fmt.Printf("Error parsing search response: %s\n", err)
+		return
+	}
+
+	hits, found := result["hits"].(map[string]interface{})["hits"].([]interface{})
+	if !found || len(hits) == 0 {
+		fmt.Println("No results found.")
+		return
+	}
+	// var output []string
+	for _, hit := range hits {
+		source := hit.(map[string]interface{})["highlight"]
+		// source := hit.(map[string]interface{})["_source"]
+		fmt.Println(source)
+		// output = append(output, source)
+	}
+	c.JSON(http.StatusCreated, hits)
+	res.Body.Close()
 }
