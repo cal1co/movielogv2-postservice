@@ -3,11 +3,12 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	cacheoperations "github.com/cal1co/movielogv2-postservice/rediscache"
+	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/gin-gonic/gin"
 	"github.com/gocql/gocql"
 	"github.com/redis/go-redis/v9"
@@ -315,7 +316,7 @@ type CommentBatchDelete struct {
 	parent     string
 }
 
-func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
+func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis.Client, es *elasticsearch.Client) {
 	userID, exists := c.Get("user_id")
 	if !exists {
 		ThrowUserIDExtractError(c)
@@ -323,9 +324,10 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 	}
 	uid := int(userID.(float64))
 	postId := c.Param("id")
-	iter := session.Query(`SELECT created_at FROM posts WHERE user_id=? and post_id=?`, uid, postId).Iter()
 	var parentCreateTime time.Time
 	var commentList []CommentBatchDelete
+
+	iter := session.Query(`SELECT created_at FROM posts WHERE user_id=? and post_id=?`, uid, postId).Iter()
 	for iter.Scan(&parentCreateTime) {
 		fmt.Println("post with id:", parentCreateTime)
 		commentList = getAllCommentDependents(postId, session)
@@ -357,15 +359,35 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 	}
 	err := session.ExecuteBatch(b)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+		c.AbortWithStatus(http.StatusNotFound)
+		return
 	}
+
+	req := esapi.DeleteRequest{
+		Index:      "posts",
+		DocumentID: postId,
+	}
+
+	res, err := req.Do(context.Background(), es)
+	if err != nil {
+		fmt.Printf("Error deleting document: %s\n", err)
+		return
+	}
+
+	if res.IsError() {
+		fmt.Printf("Error deleting document: %s\n", res.Status())
+		return
+	}
+
 	c.JSON(http.StatusOK, fmt.Sprintf("Deleted post with id %s", postId))
 }
 
 func getAllCommentDependents(post_id string, session *gocql.Session) []CommentBatchDelete {
 	var comments []CommentBatchDelete
-	iter := session.Query(`select comment_id, created_at, user_id, parent_post_id from post_comments where parent_post_id=?`, post_id).Iter()
 	var comment CommentBatchDelete
+
+	iter := session.Query(`select comment_id, created_at, user_id, parent_post_id from post_comments where parent_post_id=?`, post_id).Iter()
 	for iter.Scan(&comment.comment_id, &comment.created_at, &comment.user_id, &comment.parent) {
 		comments = append(comments, comment)
 		comments = append(comments, getAllCommentDependents(comment.comment_id, session)...)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	handlers "github.com/cal1co/movielogv2-postservice/handlers"
+	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gocql/gocql"
@@ -112,10 +114,8 @@ func verifyToken(tokenString string) (*jwt.Token, error) {
 		return []byte(os.Getenv("SECRET_TOKEN")), nil
 	})
 }
-
 func authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		fmt.Println("GETTING USER")
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			fmt.Println("NO AUTH HEADER", c.Request)
@@ -140,7 +140,6 @@ func authMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
-
 func loadEnv() {
 	err := godotenv.Load()
 	if err != nil {
@@ -166,6 +165,19 @@ func main() {
 	config.AddAllowHeaders("Authorization")
 	config.AllowOrigins = []string{"http://localhost:5173"}
 	r.Use(cors.New(config))
+
+	cert, _ := ioutil.ReadFile(os.Getenv("ELASTIC_CERT_PATH"))
+	cfg := elasticsearch.Config{
+		Addresses: []string{"https://localhost:9200"},
+		Username:  os.Getenv("ELASTIC_USERNAME"),
+		Password:  os.Getenv("ELASTIC_PASSWORD"),
+		CACert:    cert,
+	}
+	es, err := elasticsearch.NewClient(cfg)
+	if err != nil {
+		fmt.Printf("Error creating the client: %s\n", err)
+		return
+	}
 
 	r.Use(rateLimiterMiddleware())
 	r.Use(authMiddleware())
@@ -216,9 +228,8 @@ func main() {
 		handlers.HandlePostGet(c, true, session, redisClient)
 	})
 
-	// this doesnt delete from redis right now
 	r.DELETE("/posts/:id", func(c *gin.Context) {
-		handlers.HandlePostDelete(c, session, redisClient)
+		handlers.HandlePostDelete(c, session, redisClient, es)
 	})
 
 	r.Run()
