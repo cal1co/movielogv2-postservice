@@ -78,12 +78,14 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 	var post Post
 	if err := c.BindJSON(&post); err != nil {
 		fmt.Println(err)
-		throwError("ERROR WITH JSON UNMARSHAL", c)
+		throwError("error unmarshling payload", c)
 		return
 	}
 
 	post.UserID = uid
 	post.ID = gocql.TimeUUID()
+	post.Likes = 0
+	post.Comments = 0
 
 	if err := session.Query(`INSERT INTO posts (post_id, user_id, post_content, created_at) VALUES (?, ?, ?, ?)`, post.ID, post.UserID, post.PostContent, time.Now()).Exec(); err != nil {
 		fmt.Println(err)
@@ -92,10 +94,35 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 		return
 	}
 
-	post.Likes = 0
-	post.Comments = 0
+	err := fanoutPost(post)
+	if err != nil {
+		fmt.Println(err)
+		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not post with details %v, %d, %s", post.ID, post.UserID, post.PostContent))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+
 	c.JSON(http.StatusCreated, post)
 }
+
+func fanoutPost(post Post) error {
+	endpoint := "http://localhost:8081/post"
+	payload, err := json.Marshal(post)
+	if err != nil {
+		fmt.Println(err)
+		return fmt.Errorf("error adding post to user feeds - json error")
+	}
+	res, err := http.Post(endpoint, "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		fmt.Println(err)
+		return fmt.Errorf("error adding post to user feeds - post error")
+	}
+	defer res.Body.Close()
+
+	fmt.Println("Response status code:", res.StatusCode)
+	return nil
+}
+
 func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Client, isComment bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

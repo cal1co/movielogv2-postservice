@@ -55,7 +55,7 @@ func Comment(postID string, redisClient *redis.Client, ctx context.Context, c *g
 		ThrowCommentError(c, err)
 	}
 	UpdateCommentRanking(redisClient, ctx, commentCount, postID, parentID, float64(1))
-	fmt.Println("COMMENT COUNT", commentCount)
+	// fmt.Println("COMMENT COUNT", commentCount)
 	return commentCount
 }
 func UpdateCommentRanking(redisClient *redis.Client, ctx context.Context, count int, commentID string, postID string, incrAmt float64) {

@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -40,56 +41,38 @@ func init() {
 }
 
 func MigrateLikesToDB() {
+	handleMigration("post:*:likes", ":likes", "UPDATE post_interactions SET likes = ? WHERE post_id = ?")
+	handleMigration("post:*:commentcount", ":commentcount", "UPDATE post_interactions SET comments = ? WHERE post_id = ?")
+}
+func handleMigration(key string, suffix string, query string) {
 	ctx := context.Background()
 	cursor := uint64(0)
 	keys := []string{}
-
 	for {
 		var err error
-		var scanResult []string
-
-		scanResult, cursor, err = redisClient.Scan(ctx, cursor, "post:*:likes", 100).Result()
+		likesCache, cursor, err := redisClient.Scan(ctx, cursor, key, 100).Result()
 		if err != nil {
 			log.Printf("Error scanning Redis keys: %v", err)
 			return
 		}
-		log.Printf("%s", scanResult)
-		keys = append(keys, scanResult...)
-
-		if cursor == 0 {
-			break
-		}
-
-		scanResult, cursor, err = redisClient.Scan(ctx, cursor, "post:*:comments", 100).Result()
-		if err != nil {
-			log.Printf("Error scanning Redis keys: %v", err)
-			return
-		}
-		log.Printf("%s", scanResult)
-		keys = append(keys, scanResult...)
-
+		log.Printf("%s", likesCache)
+		keys = append(keys, likesCache...)
 		if cursor == 0 {
 			break
 		}
 	}
-
 	for _, key := range keys {
-		postID := strings.TrimPrefix(strings.TrimSuffix(key, ":likes"), "post:")
-		likesCount, err := redisClient.Get(ctx, key).Result()
+		postId := strings.TrimPrefix(strings.TrimSuffix(key, suffix), "post:")
+		count, err := redisClient.Get(ctx, key).Result()
 		if err != nil {
-			log.Printf("Error getting likes for post %s: %v", postID, err)
+			log.Printf("Error getting count for post %s: %v", postId, err)
 			continue
 		}
-		err = session.Query("UPDATE post_interactions SET likes = ? WHERE post_id = ?", likesCount, postID).Exec()
+		err = session.Query(query, count, postId).Exec()
 		if err != nil {
-			log.Printf("Error updating likes for post %s: %v", postID, err)
+			log.Printf("Error updating count for post %s: %v", postId, err)
 			continue
 		}
-		// err = session.Query("UPDATE post_interactions SET comments = ? WHERE post_id = ?", commentCount, postID).Exec()
-		// if err != nil {
-		// 	log.Printf("Error updating likes for post %s: %v", postID, err)
-		// 	continue
-		// }
 	}
 }
 
@@ -191,5 +174,17 @@ func main() {
 		handlers.HandlePostDelete(c, session, redisClient, es)
 	})
 
-	r.Run()
+	go func() {
+		if err := r.Run(":8082"); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	<-quit
+
+	log.Println("Shutting down server...")
+
+	log.Println("Server shutdown complete")
 }
