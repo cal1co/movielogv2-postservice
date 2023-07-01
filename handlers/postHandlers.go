@@ -429,13 +429,6 @@ type Search struct {
 
 func HandleSearch(c *gin.Context, es *elasticsearch.Client) {
 
-	// userID, exists := c.Get("user_id")
-	// if !exists {
-	// 	ThrowUserIDExtractError(c)
-	// 	return
-	// }
-	// uid := int(userID.(float64))
-	// fmt.Println(c.Keys["user_id"])
 	var search Search
 	if err := c.BindJSON(&search); err != nil {
 		fmt.Println(err)

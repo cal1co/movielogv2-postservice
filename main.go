@@ -37,7 +37,6 @@ func init() {
 		Password: "",
 		DB:       0,
 	})
-
 }
 
 func MigrateLikesToDB() {
