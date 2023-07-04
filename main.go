@@ -117,60 +117,64 @@ func main() {
 	}
 
 	r.Use(middleware.RateLimiterMiddleware())
-	r.Use(middleware.AuthMiddleware())
 
 	r.POST("/", func(c *gin.Context) {
 		fmt.Println("post to /")
 	})
-
-	r.POST("/post", func(c *gin.Context) {
+	authRoutes := r.Group("/")
+	authRoutes.Use(middleware.AuthMiddleware())
+	authRoutes.POST("/post", func(c *gin.Context) {
 		handlers.HandlePost(c, session)
 	})
 
-	r.POST("/post/:id/comment", func(c *gin.Context) {
+	authRoutes.POST("/post/:id/comment", func(c *gin.Context) {
 		handlers.HandleComment(c, session, redisClient, false)
 	})
-	r.GET("/post/:id/comments", func(c *gin.Context) {
+	authRoutes.GET("/post/:id/comments", func(c *gin.Context) {
 		handlers.GetPostComments(c, session)
 	})
-	r.POST("/comment/:id/comment", func(c *gin.Context) {
+	authRoutes.POST("/comment/:id/comment", func(c *gin.Context) {
 		handlers.HandleComment(c, session, redisClient, true)
 	})
 
-	r.POST("/post/like/:id", func(c *gin.Context) {
+	authRoutes.POST("/post/like/:id", func(c *gin.Context) {
 		handlers.HandleLike(c, false, session, redisClient)
 	})
 
-	r.POST("/post/unlike/:id", func(c *gin.Context) {
+	authRoutes.POST("/post/unlike/:id", func(c *gin.Context) {
 		handlers.HandleUnlike(c, false, session, redisClient)
 	})
 
-	r.POST("/comment/:id/like", func(c *gin.Context) {
+	authRoutes.POST("/comment/:id/like", func(c *gin.Context) {
 		handlers.HandleLike(c, true, session, redisClient)
 	})
 
-	r.POST("/comment/:id/unlike", func(c *gin.Context) {
+	authRoutes.POST("/comment/:id/unlike", func(c *gin.Context) {
 		handlers.HandleUnlike(c, true, session, redisClient)
 	})
 
-	r.GET("/feed/user/:id", func(c *gin.Context) {
+	authRoutes.GET("/feed/user/:id", func(c *gin.Context) {
 		handlers.GetUserPosts(c, session, redisClient)
 	})
 
-	r.GET("/posts/:id", func(c *gin.Context) {
+	authRoutes.GET("/posts/:id", func(c *gin.Context) {
 		handlers.HandlePostGet(c, false, session, redisClient)
 	})
 
-	r.GET("/comments/:id", func(c *gin.Context) {
+	authRoutes.GET("/comments/:id", func(c *gin.Context) {
 		handlers.HandlePostGet(c, true, session, redisClient)
 	})
 
-	r.POST("/posts/search", func(c *gin.Context) {
+	authRoutes.POST("/posts/search", func(c *gin.Context) {
 		handlers.HandleSearch(c, es)
 	})
 
-	r.DELETE("/posts/:id", func(c *gin.Context) {
+	authRoutes.DELETE("/posts/:id", func(c *gin.Context) {
 		handlers.HandlePostDelete(c, session, redisClient, es)
+	})
+
+	r.POST("/posts/feed/:id", func(c *gin.Context) {
+		handlers.HandleFeedPosts(c, session, redisClient)
 	})
 
 	go func() {
