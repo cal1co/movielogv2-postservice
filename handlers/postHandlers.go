@@ -23,7 +23,7 @@ type Post struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	Likes       int        `json:"like_count"`
 	Comments    int        `json:"comments_count"`
-	Liked       bool       `json:"liked`
+	Liked       bool
 }
 type PostRes struct {
 	Post
@@ -300,7 +300,6 @@ func GetPost(c *gin.Context, comment bool, session *gocql.Session, redisClient *
 	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, session)
 	post.Comments = comment_count
 
-	fmt.Println("POST: ", post)
 	return post, nil
 }
 func GetComment(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
@@ -372,7 +371,6 @@ func HandleFeedPosts(c *gin.Context, session *gocql.Session, redisClient *redis.
 		}
 		posts = append(posts, post)
 	}
-	fmt.Println("why are posts being sent anyways??")
 	c.JSON(http.StatusOK, posts)
 }
 

@@ -43,6 +43,7 @@ func MigrateLikesToDB() {
 	handleMigration("post:*:likes", ":likes", "UPDATE post_interactions SET likes = ? WHERE post_id = ?")
 	handleMigration("post:*:commentcount", ":commentcount", "UPDATE post_interactions SET comments = ? WHERE post_id = ?")
 }
+
 func handleMigration(key string, suffix string, query string) {
 	ctx := context.Background()
 	cursor := uint64(0)
@@ -88,7 +89,7 @@ func main() {
 	go func() {
 		for {
 			MigrateLikesToDB()
-			time.Sleep(time.Hour)
+			time.Sleep(time.Minute * 5)
 		}
 	}()
 
@@ -123,6 +124,7 @@ func main() {
 	})
 	authRoutes := r.Group("/")
 	authRoutes.Use(middleware.AuthMiddleware())
+
 	authRoutes.POST("/post", func(c *gin.Context) {
 		handlers.HandlePost(c, session)
 	})
