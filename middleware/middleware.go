@@ -13,7 +13,7 @@ import (
 )
 
 func RateLimiterMiddleware() gin.HandlerFunc {
-	limiter := rate.NewLimiter(1, 5)
+	limiter := rate.NewLimiter(1, 20)
 
 	return func(c *gin.Context) {
 		if limiter.Allow() == false {

@@ -24,6 +24,7 @@ type Post struct {
 	Likes       int        `json:"like_count"`
 	Comments    int        `json:"comments_count"`
 	Liked       bool
+	Media       []string `json:"media"`
 }
 type PostRes struct {
 	Post
@@ -75,7 +76,6 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 		return
 	}
 	uid := int(userID.(float64))
-
 	var post Post
 	if err := c.BindJSON(&post); err != nil {
 		fmt.Println(err)
@@ -87,6 +87,7 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 	post.ID = gocql.TimeUUID()
 	post.Likes = 0
 	post.Comments = 0
+	handleMediaPost(post, session, c)
 
 	if err := session.Query(`INSERT INTO posts (post_id, user_id, post_content, created_at) VALUES (?, ?, ?, ?)`, post.ID, post.UserID, post.PostContent, time.Now()).Exec(); err != nil {
 		fmt.Println(err)
@@ -102,7 +103,6 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-
 	c.JSON(http.StatusCreated, post)
 }
 
@@ -360,6 +360,7 @@ func HandleFeedPosts(c *gin.Context, session *gocql.Session, redisClient *redis.
 	uid := c.Param("id")
 	var postList []gocql.UUID
 	if err := c.BindJSON(&postList); err != nil {
+		fmt.Println(err)
 		throwError("error unmarshling payload", c)
 		return
 	}
@@ -536,4 +537,47 @@ func HandleSearch(c *gin.Context, es *elasticsearch.Client) {
 	}
 	c.JSON(http.StatusCreated, hits)
 	res.Body.Close()
+}
+
+func HandleGetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
+	fmt.Println("called")
+	uid := c.Param("id")
+	query := `SELECT post_id, user_id, post_content, created_at FROM posts WHERE user_id = ? LIMIT 15`
+	iter := session.Query(query, uid).Iter()
+	var posts []Post
+	var post Post
+	for iter.Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, session)
+		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, session)
+		post.Likes = like_count
+		post.Comments = comment_count
+
+		post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
+
+		posts = append(posts, post)
+	}
+
+	if err := iter.Close(); err != nil {
+		fmt.Println(err)
+		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not fetch post results for user with id %v", uid))
+		c.AbortWithStatus(http.StatusNotFound)
+	}
+
+	c.JSON(http.StatusOK, posts)
+	return
+}
+
+func handleMediaPost(post Post, session *gocql.Session, c *gin.Context) {
+	for i := 0; i < len(post.Media); i++ {
+		media_id := gocql.TimeUUID()
+		if err := session.Query(`INSERT INTO post_media (post_id, media_id, order_number, media_reference) VALUES (?, ?, ?, ?)`, post.ID, media_id, i+1, fmt.Sprintf("%s:%d", post.ID, i+1)).Exec(); err != nil {
+			fmt.Println(err)
+			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not post with details %v, %d, %s", post.ID, post.UserID, post.PostContent))
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+	}
 }

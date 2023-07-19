@@ -100,7 +100,7 @@ func main() {
 	config := cors.DefaultConfig()
 	config.AllowMethods = []string{"GET", "POST", "DELETE", "OPTIONS"}
 	config.AddAllowHeaders("Authorization")
-	config.AllowOrigins = []string{"http://localhost:5173"}
+	config.AllowOrigins = []string{"http://localhost:5173", "http://localhost:3000"}
 
 	r.Use(cors.New(config))
 
@@ -122,6 +122,9 @@ func main() {
 	r.POST("/", func(c *gin.Context) {
 		fmt.Println("post to /")
 	})
+	r.GET("/posts/user/:id", func(c *gin.Context) {
+		handlers.HandleGetUserPosts(c, session, redisClient)
+	})
 	authRoutes := r.Group("/")
 	authRoutes.Use(middleware.AuthMiddleware())
 
@@ -132,9 +135,11 @@ func main() {
 	authRoutes.POST("/post/:id/comment", func(c *gin.Context) {
 		handlers.HandleComment(c, session, redisClient, false)
 	})
+
 	authRoutes.GET("/post/:id/comments", func(c *gin.Context) {
 		handlers.GetPostComments(c, session)
 	})
+
 	authRoutes.POST("/comment/:id/comment", func(c *gin.Context) {
 		handlers.HandleComment(c, session, redisClient, true)
 	})
