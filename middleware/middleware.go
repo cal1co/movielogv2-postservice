@@ -1,14 +1,17 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 )
 
@@ -55,6 +58,30 @@ func AuthMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization token"})
 			return
 		}
+		c.Next()
+	}
+}
+
+func ActivityTrackerMiddleware(redisClient *redis.Client) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := context.Background()
+
+		userId, exists := c.Get("user_id")
+		fmt.Println("before")
+		if !exists {
+			c.Next()
+			return
+		}
+		fmt.Println("after")
+
+		lastActiveKey := fmt.Sprintf("user:%v:lastActive", userId)
+
+		now := time.Now().UTC().Unix()
+		fmt.Println("TIME", now)
+		if err := redisClient.Set(ctx, lastActiveKey, now, 0).Err(); err != nil {
+			fmt.Println("Error updating user activity:", err)
+		}
+
 		c.Next()
 	}
 }

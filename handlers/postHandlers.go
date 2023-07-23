@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
+	"strconv"
 	"time"
 
 	cacheoperations "github.com/cal1co/movielogv2-postservice/rediscache"
@@ -38,6 +40,7 @@ type Comment struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	Likes       int        `json:"like_count"`
 	Comments    int        `json:"comments_count"`
+	Liked       bool       `json:"liked"`
 }
 type PostInteraction struct {
 	PostId   gocql.UUID
@@ -332,8 +335,26 @@ func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Cli
 	c.JSON(http.StatusOK, posts)
 	return
 }
-func GetPostComments(c *gin.Context, session *gocql.Session) {
+func GetPostComments(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
 	post_id := c.Param("id")
+	user_id, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusNotFound, "Couldn't extract uid")
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	var uid string
+	switch val := user_id.(type) {
+	case float64:
+		uid = strconv.FormatFloat(val, 'f', -1, 64)
+	case string:
+		uid = val // If it's already a string, no need to convert
+	default:
+		fmt.Println(reflect.TypeOf(user_id))
+		c.JSON(http.StatusInternalServerError, "uid is not a valid type")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
 	var comments []Comment
 	iter := session.Query(`SELECT comment_id, comment_content, created_at, user_id FROM post_comments WHERE parent_post_id = ? LIMIT 10;`, post_id).Iter()
 	var comment Comment
@@ -344,7 +365,12 @@ func GetPostComments(c *gin.Context, session *gocql.Session) {
 		c.AbortWithStatus(http.StatusNotFound)
 	}
 	for iter.Scan(&comment.ID, &comment.PostContent, &comment.CreatedAt, &comment.UserID) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 		comment.ParentID = uuid
+		comment.Likes = cacheoperations.GetPostLikes(comment.ID.String(), redisClient, ctx, session)
+		comment.Comments = cacheoperations.GetPostComments(comment.ID.String(), redisClient, ctx, session)
+		comment.Liked = CheckLikedByUser(uid, comment.ID.String(), session)
 		comments = append(comments, comment)
 	}
 	if err := iter.Close(); err != nil {

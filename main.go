@@ -127,6 +127,7 @@ func main() {
 	})
 	authRoutes := r.Group("/")
 	authRoutes.Use(middleware.AuthMiddleware())
+	authRoutes.Use(middleware.ActivityTrackerMiddleware(redisClient))
 
 	authRoutes.POST("/post", func(c *gin.Context) {
 		handlers.HandlePost(c, session)
@@ -137,7 +138,7 @@ func main() {
 	})
 
 	authRoutes.GET("/post/:id/comments", func(c *gin.Context) {
-		handlers.GetPostComments(c, session)
+		handlers.GetPostComments(c, session, redisClient)
 	})
 
 	authRoutes.POST("/comment/:id/comment", func(c *gin.Context) {
