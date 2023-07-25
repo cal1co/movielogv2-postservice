@@ -90,6 +90,7 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 	post.ID = gocql.TimeUUID()
 	post.Likes = 0
 	post.Comments = 0
+	post.CreatedAt = time.Now()
 	handleMediaPost(post, session, c)
 
 	if err := session.Query(`INSERT INTO posts (post_id, user_id, post_content, created_at) VALUES (?, ?, ?, ?)`, post.ID, post.UserID, post.PostContent, time.Now()).Exec(); err != nil {
@@ -281,7 +282,7 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 	post.Likes = like_count
 	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, session)
 	post.Comments = comment_count
-
+	post.Media = GetPostMedia(post.ID, session)
 	c.JSON(http.StatusOK, post)
 	return post, nil
 }
@@ -302,7 +303,7 @@ func GetPost(c *gin.Context, comment bool, session *gocql.Session, redisClient *
 	post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
 	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, session)
 	post.Comments = comment_count
-
+	post.Media = GetPostMedia(post.ID, session)
 	return post, nil
 }
 func GetComment(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
@@ -606,4 +607,39 @@ func handleMediaPost(post Post, session *gocql.Session, c *gin.Context) {
 			return
 		}
 	}
+}
+
+type PostMedia struct {
+	ID        *gocql.UUID `json:"id"`
+	FileNames []string    `json:"file_names"`
+}
+
+func HandleAddMediaToPost(c *gin.Context, session *gocql.Session) {
+	var post_media PostMedia
+	if err := c.BindJSON(&post_media); err != nil {
+		fmt.Println(err)
+		throwError("error unmarshling payload", c)
+		return
+	}
+	for i := 0; i < len(post_media.FileNames); i++ {
+		if err := session.Query(`INSERT INTO post_media (post_id, media_id, media_reference, order_number) VALUES (?, ?, ?, ?)`, post_media.ID, gocql.TimeUUID(), post_media.FileNames[i], i).Exec(); err != nil {
+			fmt.Println(err)
+			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not add post media to post with id %s", post_media.ID))
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+	}
+	c.JSON(http.StatusCreated, post_media.FileNames)
+}
+
+func GetPostMedia(id gocql.UUID, session *gocql.Session) []string {
+	fmt.Println("ID", id)
+	query := `SELECT media_reference FROM post_media WHERE post_id = ?`
+	iter := session.Query(query, id).Iter()
+	var mediaReferences []string
+	var mediaStr string
+	for iter.Scan(&mediaStr) {
+		mediaReferences = append(mediaReferences, mediaStr)
+	}
+	return mediaReferences
 }

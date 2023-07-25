@@ -119,15 +119,12 @@ func main() {
 
 	r.Use(middleware.RateLimiterMiddleware())
 
-	r.POST("/", func(c *gin.Context) {
-		fmt.Println("post to /")
-	})
-	r.GET("/posts/user/:id", func(c *gin.Context) {
-		handlers.HandleGetUserPosts(c, session, redisClient)
-	})
 	authRoutes := r.Group("/")
 	authRoutes.Use(middleware.AuthMiddleware())
 	authRoutes.Use(middleware.ActivityTrackerMiddleware(redisClient))
+	authRoutes.GET("/posts/user/:id", func(c *gin.Context) {
+		handlers.HandleGetUserPosts(c, session, redisClient)
+	})
 
 	authRoutes.POST("/post", func(c *gin.Context) {
 		handlers.HandlePost(c, session)
@@ -179,6 +176,9 @@ func main() {
 
 	authRoutes.DELETE("/posts/:id", func(c *gin.Context) {
 		handlers.HandlePostDelete(c, session, redisClient, es)
+	})
+	authRoutes.POST("/post/media", func(c *gin.Context) {
+		handlers.HandleAddMediaToPost(c, session)
 	})
 
 	r.POST("/posts/feed/:id", func(c *gin.Context) {

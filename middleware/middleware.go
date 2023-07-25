@@ -67,17 +67,14 @@ func ActivityTrackerMiddleware(redisClient *redis.Client) gin.HandlerFunc {
 		ctx := context.Background()
 
 		userId, exists := c.Get("user_id")
-		fmt.Println("before")
 		if !exists {
 			c.Next()
 			return
 		}
-		fmt.Println("after")
 
 		lastActiveKey := fmt.Sprintf("user:%v:lastActive", userId)
 
 		now := time.Now().UTC().Unix()
-		fmt.Println("TIME", now)
 		if err := redisClient.Set(ctx, lastActiveKey, now, 0).Err(); err != nil {
 			fmt.Println("Error updating user activity:", err)
 		}
