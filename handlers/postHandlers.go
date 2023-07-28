@@ -59,10 +59,10 @@ func ThrowUserIDExtractError(c *gin.Context) {
 	c.JSON(http.StatusNotFound, "Couldn't extract uid")
 	c.AbortWithStatus(http.StatusBadRequest)
 }
-func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
+func CheckLikedByUser(uid string, postId string, cqlHandler *Handler) bool {
 
 	var likeCount int
-	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, postId, uid).Scan(&likeCount); err != nil {
+	if err := cqlHandler.Session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, postId, uid).Scan(&likeCount); err != nil {
 		fmt.Println("Error checking user likes:", err)
 		return false
 	}
@@ -72,7 +72,7 @@ func CheckLikedByUser(uid string, postId string, session *gocql.Session) bool {
 		return false
 	}
 }
-func HandlePost(c *gin.Context, session *gocql.Session) {
+func HandlePost(c *gin.Context, cqlHandler *Handler) {
 	userID, exists := c.Get("user_id")
 	if !exists {
 		ThrowUserIDExtractError(c)
@@ -91,9 +91,9 @@ func HandlePost(c *gin.Context, session *gocql.Session) {
 	post.Likes = 0
 	post.Comments = 0
 	post.CreatedAt = time.Now()
-	handleMediaPost(post, session, c)
+	handleMediaPost(post, cqlHandler, c)
 
-	if err := session.Query(`INSERT INTO posts (post_id, user_id, post_content, created_at) VALUES (?, ?, ?, ?)`, post.ID, post.UserID, post.PostContent, time.Now()).Exec(); err != nil {
+	if err := cqlHandler.Session.Query(`INSERT INTO posts (post_id, user_id, post_content, created_at) VALUES (?, ?, ?, ?)`, post.ID, post.UserID, post.PostContent, time.Now()).Exec(); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not post with details %v, %d, %s", post.ID, post.UserID, post.PostContent))
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -127,7 +127,7 @@ func fanoutPost(post Post) error {
 	fmt.Println("Response status code:", res.StatusCode)
 	return nil
 }
-func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Client, isComment bool) {
+func HandleComment(c *gin.Context, cqlHandler *Handler, redisClient *redis.Client, isComment bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var comment Comment
@@ -153,7 +153,7 @@ func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Cl
 
 	var parent string
 	if isComment {
-		if err := session.Query(`select parent_post_id from post_comments where comment_id=?`, parentId).Scan(&parent); err != nil {
+		if err := cqlHandler.Session.Query(`select parent_post_id from post_comments where comment_id=?`, parentId).Scan(&parent); err != nil {
 			fmt.Println("error checking likes", err)
 			c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
 			return
@@ -162,7 +162,7 @@ func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Cl
 		parent = "null"
 	}
 
-	if err := session.Query(`INSERT INTO post_comments (comment_id, user_id, parent_post_id, comment_content, created_at) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.UserID, comment.ParentID, comment.PostContent, time.Now()).Exec(); err != nil {
+	if err := cqlHandler.Session.Query(`INSERT INTO post_comments (comment_id, user_id, parent_post_id, comment_content, created_at) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.UserID, comment.ParentID, comment.PostContent, time.Now()).Exec(); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, "Error commenting")
 		return
@@ -170,12 +170,12 @@ func HandleComment(c *gin.Context, session *gocql.Session, redisClient *redis.Cl
 	comment.Likes = 0
 	comment.Comments = 0
 
-	cacheoperations.Comment(comment.ParentID.String(), redisClient, ctx, c, session, parent)
-	comment_count := cacheoperations.GetPostComments(comment.ParentID.String(), redisClient, ctx, session)
+	cacheoperations.Comment(comment.ParentID.String(), redisClient, ctx, c, cqlHandler.Session, parent)
+	comment_count := cacheoperations.GetPostComments(comment.ParentID.String(), redisClient, ctx, cqlHandler.Session)
 
 	c.JSON(http.StatusCreated, comment_count)
 }
-func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
+func HandleUnlike(c *gin.Context, comment bool, cqlHandler *Handler, redisClient *redis.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	post_id := c.Param("id")
@@ -187,7 +187,7 @@ func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisCli
 	uid := int(userID.(float64))
 	var parent string
 	if comment {
-		if err := session.Query(`select parent_post_id from post_comments where comment_id=?`, post_id).Scan(&parent); err != nil {
+		if err := cqlHandler.Session.Query(`select parent_post_id from post_comments where comment_id=?`, post_id).Scan(&parent); err != nil {
 			fmt.Println("error checking likes", err)
 			c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
 			return
@@ -197,7 +197,7 @@ func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisCli
 	}
 
 	var likeCount int
-	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, post_id, uid).Scan(&likeCount); err != nil {
+	if err := cqlHandler.Session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, post_id, uid).Scan(&likeCount); err != nil {
 		fmt.Println("Error checking user likes:", err)
 		c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
 		return
@@ -207,9 +207,9 @@ func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisCli
 		return
 	}
 
-	likes := cacheoperations.Unlike(post_id, redisClient, ctx, c, session, comment, parent)
+	likes := cacheoperations.Unlike(post_id, redisClient, ctx, c, cqlHandler.Session, comment, parent)
 
-	if err := session.Query(`DELETE FROM user_likes WHERE user_id=? AND post_id=?`, uid, post_id).Exec(); err != nil {
+	if err := cqlHandler.Session.Query(`DELETE FROM user_likes WHERE user_id=? AND post_id=?`, uid, post_id).Exec(); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not unlike post with id %s", post_id))
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -218,7 +218,7 @@ func HandleUnlike(c *gin.Context, comment bool, session *gocql.Session, redisCli
 
 	c.JSON(http.StatusOK, likes)
 }
-func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
+func HandleLike(c *gin.Context, comment bool, cqlHandler *Handler, redisClient *redis.Client) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	post_id := c.Param("id")
@@ -230,7 +230,7 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 	uid := int(userID.(float64))
 	var parent string
 	if comment {
-		if err := session.Query(`select parent_post_id from post_comments where comment_id=?`, post_id).Scan(&parent); err != nil {
+		if err := cqlHandler.Session.Query(`select parent_post_id from post_comments where comment_id=?`, post_id).Scan(&parent); err != nil {
 			fmt.Println("error checking likes", err)
 			c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
 			return
@@ -240,7 +240,7 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 	}
 
 	var likeCount int
-	if err := session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, post_id, uid).Scan(&likeCount); err != nil {
+	if err := cqlHandler.Session.Query(`SELECT COUNT(*) FROM user_likes WHERE post_id=? AND user_id=?`, post_id, uid).Scan(&likeCount); err != nil {
 		fmt.Println("Error checking user likes:", err)
 		c.JSON(http.StatusInternalServerError, "Sorry, could not check if user has liked post.")
 		return
@@ -250,9 +250,9 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 		return
 	}
 
-	likes := cacheoperations.Like(post_id, redisClient, ctx, c, session, comment, parent)
+	likes := cacheoperations.Like(post_id, redisClient, ctx, c, cqlHandler.Session, comment, parent)
 
-	if err := session.Query(`INSERT INTO user_likes (user_id, post_id, created_at) VALUES (?, ?, ?)`, uid, post_id, time.Now()).Exec(); err != nil {
+	if err := cqlHandler.Session.Query(`INSERT INTO user_likes (user_id, post_id, created_at) VALUES (?, ?, ?)`, uid, post_id, time.Now()).Exec(); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, could not like post with id %s", post_id))
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -261,7 +261,7 @@ func HandleLike(c *gin.Context, comment bool, session *gocql.Session, redisClien
 
 	c.JSON(http.StatusOK, likes)
 }
-func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) (Post, error) {
+func HandlePostGet(c *gin.Context, comment bool, cqlHandler *Handler, redisClient *redis.Client) (Post, error) {
 	post_id := c.Param("id")
 	var query string
 	if comment {
@@ -270,7 +270,7 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 		query = `SELECT post_id, user_id, post_content, created_at FROM posts WHERE post_id = ? LIMIT 1`
 	}
 	var post Post
-	if err := session.Query(query, post_id).Consistency(gocql.One).Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt); err != nil {
+	if err := cqlHandler.Session.Query(query, post_id).Consistency(gocql.One).Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, post with id '%s' could not be found", post_id))
 		c.AbortWithStatus(http.StatusNotFound)
@@ -278,19 +278,19 @@ func HandlePostGet(c *gin.Context, comment bool, session *gocql.Session, redisCl
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	like_count := cacheoperations.GetPostLikes(post_id, redisClient, ctx, session)
+	like_count := cacheoperations.GetPostLikes(post_id, redisClient, ctx, cqlHandler.Session)
 	post.Likes = like_count
-	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, session)
+	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, cqlHandler.Session)
 	post.Comments = comment_count
-	post.Media = GetPostMedia(post.ID, session)
+	post.Media = GetPostMedia(post.ID, cqlHandler)
 	c.JSON(http.StatusOK, post)
 	return post, nil
 }
-func GetPost(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client, post_id string, uid string) (Post, error) {
+func GetPost(c *gin.Context, comment bool, cqlHandler *Handler, redisClient *redis.Client, post_id string, uid string) (Post, error) {
 
 	query := `SELECT post_id, user_id, post_content, created_at FROM posts WHERE post_id = ? LIMIT 1`
 	var post Post
-	if err := session.Query(query, post_id).Consistency(gocql.One).Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt); err != nil {
+	if err := cqlHandler.Session.Query(query, post_id).Consistency(gocql.One).Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt); err != nil {
 		fmt.Println(err)
 		c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, post with id '%s' could not be found", post_id))
 		c.AbortWithStatus(http.StatusNotFound)
@@ -298,32 +298,32 @@ func GetPost(c *gin.Context, comment bool, session *gocql.Session, redisClient *
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	like_count := cacheoperations.GetPostLikes(post_id, redisClient, ctx, session)
+	like_count := cacheoperations.GetPostLikes(post_id, redisClient, ctx, cqlHandler.Session)
 	post.Likes = like_count
-	post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
-	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, session)
+	post.Liked = CheckLikedByUser(uid, post.ID.String(), cqlHandler)
+	comment_count := cacheoperations.GetPostComments(post_id, redisClient, ctx, cqlHandler.Session)
 	post.Comments = comment_count
-	post.Media = GetPostMedia(post.ID, session)
+	post.Media = GetPostMedia(post.ID, cqlHandler)
 	return post, nil
 }
-func GetComment(c *gin.Context, comment bool, session *gocql.Session, redisClient *redis.Client) {
+func GetComment(c *gin.Context, comment bool, session Handler, redisClient *redis.Client) {
 
 }
-func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
+func GetUserPosts(c *gin.Context, cqlHandler *Handler, redisClient *redis.Client) {
 	uid := c.Param("id")
 	var posts []PostRes
-	iter := session.Query(`SELECT post_id, post_content, created_at, user_id FROM posts WHERE user_id = ? AND created_at < ? LIMIT 12;`, uid, time.Now()).Iter()
+	iter := cqlHandler.Session.Query(`SELECT post_id, post_content, created_at, user_id FROM posts WHERE user_id = ? AND created_at < ? LIMIT 12;`, uid, time.Now()).Iter()
 	var post PostRes
 	for iter.Scan(&post.ID, &post.PostContent, &post.CreatedAt, &post.UserID) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, session)
-		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, session)
+		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, cqlHandler.Session)
+		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, cqlHandler.Session)
 		post.Likes = like_count
 		post.Comments = comment_count
 
-		post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
+		post.Liked = CheckLikedByUser(uid, post.ID.String(), cqlHandler)
 
 		posts = append(posts, post)
 	}
@@ -336,7 +336,7 @@ func GetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Cli
 	c.JSON(http.StatusOK, posts)
 	return
 }
-func GetPostComments(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
+func GetPostComments(c *gin.Context, cqlHandler *Handler, redisClient *redis.Client) {
 	post_id := c.Param("id")
 	user_id, exists := c.Get("user_id")
 	if !exists {
@@ -357,7 +357,7 @@ func GetPostComments(c *gin.Context, session *gocql.Session, redisClient *redis.
 		return
 	}
 	var comments []Comment
-	iter := session.Query(`SELECT comment_id, comment_content, created_at, user_id FROM post_comments WHERE parent_post_id = ? LIMIT 10;`, post_id).Iter()
+	iter := cqlHandler.Session.Query(`SELECT comment_id, comment_content, created_at, user_id FROM post_comments WHERE parent_post_id = ? LIMIT 10;`, post_id).Iter()
 	var comment Comment
 	uuid, err := gocql.ParseUUID(post_id)
 	if err != nil {
@@ -369,9 +369,9 @@ func GetPostComments(c *gin.Context, session *gocql.Session, redisClient *redis.
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		comment.ParentID = uuid
-		comment.Likes = cacheoperations.GetPostLikes(comment.ID.String(), redisClient, ctx, session)
-		comment.Comments = cacheoperations.GetPostComments(comment.ID.String(), redisClient, ctx, session)
-		comment.Liked = CheckLikedByUser(uid, comment.ID.String(), session)
+		comment.Likes = cacheoperations.GetPostLikes(comment.ID.String(), redisClient, ctx, cqlHandler.Session)
+		comment.Comments = cacheoperations.GetPostComments(comment.ID.String(), redisClient, ctx, cqlHandler.Session)
+		comment.Liked = CheckLikedByUser(uid, comment.ID.String(), cqlHandler)
 		comments = append(comments, comment)
 	}
 	if err := iter.Close(); err != nil {
@@ -383,7 +383,7 @@ func GetPostComments(c *gin.Context, session *gocql.Session, redisClient *redis.
 	c.JSON(http.StatusOK, comments)
 	return
 }
-func HandleFeedPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
+func HandleFeedPosts(c *gin.Context, cqlHandler *Handler, redisClient *redis.Client) {
 	uid := c.Param("id")
 	var postList []gocql.UUID
 	if err := c.BindJSON(&postList); err != nil {
@@ -393,7 +393,7 @@ func HandleFeedPosts(c *gin.Context, session *gocql.Session, redisClient *redis.
 	}
 	var posts []Post
 	for i := 0; i < len(postList); i++ {
-		post, err := GetPost(c, false, session, redisClient, postList[i].String(), uid)
+		post, err := GetPost(c, false, cqlHandler, redisClient, postList[i].String(), uid)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -409,7 +409,7 @@ type CommentBatchDelete struct {
 	parent     string
 }
 
-func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis.Client, es *elasticsearch.Client) {
+func HandlePostDelete(c *gin.Context, cqlHandler *Handler, redisClient *redis.Client, es *elasticsearch.Client) {
 	userID, exists := c.Get("user_id")
 	if !exists {
 		ThrowUserIDExtractError(c)
@@ -421,14 +421,14 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 	var parentCreateTime time.Time
 	var commentList []CommentBatchDelete
 
-	iter := session.Query(`SELECT created_at FROM posts WHERE user_id=? and post_id=?`, uid, postId).Iter()
+	iter := cqlHandler.Session.Query(`SELECT created_at FROM posts WHERE user_id=? and post_id=?`, uid, postId).Iter()
 	for iter.Scan(&parentCreateTime) {
 		fmt.Println("post with id:", parentCreateTime)
-		commentList = getAllCommentDependents(postId, session)
+		commentList = getAllCommentDependents(postId, cqlHandler)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	b := session.NewBatch(gocql.UnloggedBatch).WithContext(ctx)
+	b := cqlHandler.Session.NewBatch(gocql.UnloggedBatch).WithContext(ctx)
 	b.Entries = append(b.Entries, gocql.BatchEntry{
 		Stmt:       "DELETE FROM posts WHERE post_id=? AND user_id=? and created_at=?;",
 		Args:       []interface{}{postId, uid, parentCreateTime},
@@ -451,7 +451,7 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 			Idempotent: true,
 		})
 	}
-	err := session.ExecuteBatch(b)
+	err := cqlHandler.Session.ExecuteBatch(b)
 	if err != nil {
 		fmt.Println(err)
 		c.AbortWithStatus(http.StatusNotFound)
@@ -476,14 +476,14 @@ func HandlePostDelete(c *gin.Context, session *gocql.Session, redisClient *redis
 
 	c.JSON(http.StatusOK, fmt.Sprintf("Deleted post with id %s", postId))
 }
-func getAllCommentDependents(post_id string, session *gocql.Session) []CommentBatchDelete {
+func getAllCommentDependents(post_id string, cqlHandler *Handler) []CommentBatchDelete {
 	var comments []CommentBatchDelete
 	var comment CommentBatchDelete
 
-	iter := session.Query(`select comment_id, created_at, user_id, parent_post_id from post_comments where parent_post_id=?`, post_id).Iter()
+	iter := cqlHandler.Session.Query(`select comment_id, created_at, user_id, parent_post_id from post_comments where parent_post_id=?`, post_id).Iter()
 	for iter.Scan(&comment.comment_id, &comment.created_at, &comment.user_id, &comment.parent) {
 		comments = append(comments, comment)
-		comments = append(comments, getAllCommentDependents(comment.comment_id, session)...)
+		comments = append(comments, getAllCommentDependents(comment.comment_id, cqlHandler)...)
 	}
 	if err := iter.Close(); err != nil {
 		fmt.Println(err)
@@ -566,24 +566,24 @@ func HandleSearch(c *gin.Context, es *elasticsearch.Client) {
 	res.Body.Close()
 }
 
-func HandleGetUserPosts(c *gin.Context, session *gocql.Session, redisClient *redis.Client) {
+func HandleGetUserPosts(c *gin.Context, cqlHandler *Handler, redisClient *redis.Client) {
 	fmt.Println("called")
 	uid := c.Param("id")
 	query := `SELECT post_id, user_id, post_content, created_at FROM posts WHERE user_id = ? LIMIT 15`
-	iter := session.Query(query, uid).Iter()
+	iter := cqlHandler.Session.Query(query, uid).Iter()
 	var posts []Post
 	var post Post
 	for iter.Scan(&post.ID, &post.UserID, &post.PostContent, &post.CreatedAt) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, session)
-		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, session)
+		like_count := cacheoperations.GetPostLikes(post.ID.String(), redisClient, ctx, cqlHandler.Session)
+		comment_count := cacheoperations.GetPostComments(post.ID.String(), redisClient, ctx, cqlHandler.Session)
 		post.Likes = like_count
 		post.Comments = comment_count
 
-		post.Liked = CheckLikedByUser(uid, post.ID.String(), session)
-
+		post.Liked = CheckLikedByUser(uid, post.ID.String(), cqlHandler)
+		post.Media = GetPostMedia(post.ID, cqlHandler)
 		posts = append(posts, post)
 	}
 
@@ -597,10 +597,10 @@ func HandleGetUserPosts(c *gin.Context, session *gocql.Session, redisClient *red
 	return
 }
 
-func handleMediaPost(post Post, session *gocql.Session, c *gin.Context) {
+func handleMediaPost(post Post, cqlHandler *Handler, c *gin.Context) {
 	for i := 0; i < len(post.Media); i++ {
 		media_id := gocql.TimeUUID()
-		if err := session.Query(`INSERT INTO post_media (post_id, media_id, order_number, media_reference) VALUES (?, ?, ?, ?)`, post.ID, media_id, i+1, fmt.Sprintf("%s:%d", post.ID, i+1)).Exec(); err != nil {
+		if err := cqlHandler.Session.Query(`INSERT INTO post_media (post_id, media_id, order_number, media_reference) VALUES (?, ?, ?, ?)`, post.ID, media_id, i+1, fmt.Sprintf("%s:%d", post.ID, i+1)).Exec(); err != nil {
 			fmt.Println(err)
 			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not post with details %v, %d, %s", post.ID, post.UserID, post.PostContent))
 			c.AbortWithStatus(http.StatusInternalServerError)
@@ -614,7 +614,7 @@ type PostMedia struct {
 	FileNames []string    `json:"file_names"`
 }
 
-func HandleAddMediaToPost(c *gin.Context, session *gocql.Session) {
+func HandleAddMediaToPost(c *gin.Context, cqlHandler *Handler) {
 	var post_media PostMedia
 	if err := c.BindJSON(&post_media); err != nil {
 		fmt.Println(err)
@@ -622,7 +622,7 @@ func HandleAddMediaToPost(c *gin.Context, session *gocql.Session) {
 		return
 	}
 	for i := 0; i < len(post_media.FileNames); i++ {
-		if err := session.Query(`INSERT INTO post_media (post_id, media_id, media_reference, order_number) VALUES (?, ?, ?, ?)`, post_media.ID, gocql.TimeUUID(), post_media.FileNames[i], i).Exec(); err != nil {
+		if err := cqlHandler.Session.Query(`INSERT INTO post_media (post_id, media_id, media_reference, order_number) VALUES (?, ?, ?, ?)`, post_media.ID, gocql.TimeUUID(), post_media.FileNames[i], i).Exec(); err != nil {
 			fmt.Println(err)
 			c.JSON(http.StatusNotFound, fmt.Sprintf("Sorry, count not add post media to post with id %s", post_media.ID))
 			c.AbortWithStatus(http.StatusInternalServerError)
@@ -632,10 +632,10 @@ func HandleAddMediaToPost(c *gin.Context, session *gocql.Session) {
 	c.JSON(http.StatusCreated, post_media.FileNames)
 }
 
-func GetPostMedia(id gocql.UUID, session *gocql.Session) []string {
+func GetPostMedia(id gocql.UUID, cqlHandler *Handler) []string {
 	fmt.Println("ID", id)
 	query := `SELECT media_reference FROM post_media WHERE post_id = ?`
-	iter := session.Query(query, id).Iter()
+	iter := cqlHandler.Session.Query(query, id).Iter()
 	var mediaReferences []string
 	var mediaStr string
 	for iter.Scan(&mediaStr) {
