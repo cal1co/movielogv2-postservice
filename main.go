@@ -28,7 +28,7 @@ type PostHandler struct {
 }
 
 func init() {
-	cluster := gocql.NewCluster("127.0.0.1")
+	cluster := gocql.NewCluster("cassandra")
 	cluster.Keyspace = "user_posts"
 	var err error
 	session, err = cluster.CreateSession()
@@ -37,7 +37,7 @@ func init() {
 	}
 
 	redisClient = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
+		Addr:     "yuzu-post-interactions:6379",
 		Password: "",
 		DB:       0,
 	})
@@ -110,7 +110,7 @@ func main() {
 
 	cert, _ := ioutil.ReadFile(os.Getenv("ELASTIC_CERT_PATH"))
 	cfg := elasticsearch.Config{
-		Addresses: []string{"https://localhost:9200"},
+		Addresses: []string{"ELASTIC_ADDRESS"},
 		Username:  os.Getenv("ELASTIC_USERNAME"),
 		Password:  os.Getenv("ELASTIC_PASSWORD"),
 		CACert:    cert,
