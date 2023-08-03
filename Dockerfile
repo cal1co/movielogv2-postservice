@@ -10,4 +10,4 @@ RUN go build -o yuzu-post-handler
 
 CMD ["./yuzu-post-handler"]
 
-EXPOSE 8081
+EXPOSE 8080

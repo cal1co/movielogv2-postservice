@@ -185,6 +185,7 @@ func main() {
 	authRoutes.DELETE("/posts/:id", func(c *gin.Context) {
 		handlers.HandlePostDelete(c, handler, redisClient, es)
 	})
+
 	authRoutes.POST("/post/media", func(c *gin.Context) {
 		handlers.HandleAddMediaToPost(c, handler)
 	})
@@ -194,7 +195,7 @@ func main() {
 	})
 
 	go func() {
-		if err := r.Run(":8082"); err != nil {
+		if err := r.Run(":8080"); err != nil {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()

@@ -46,7 +46,6 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		token, err := verifyToken(tokenString)
 		if err != nil {
-			fmt.Println("ERROR HERE", tokenString, token, err)
 			log.Printf("error: %s", err)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization token"})
 			return

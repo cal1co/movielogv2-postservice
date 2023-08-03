@@ -111,7 +111,7 @@ func HandlePost(c *gin.Context, cqlHandler *Handler) {
 }
 
 func fanoutPost(post Post) error {
-	endpoint := "http://localhost:8081/post"
+	endpoint := "http://yuzu-feed-handler:8080/post"
 	payload, err := json.Marshal(post)
 	if err != nil {
 		fmt.Println(err)
